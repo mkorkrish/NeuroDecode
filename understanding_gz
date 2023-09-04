@@ -1,0 +1,10 @@
+import gzip
+
+file_path = "Data\s1.tar.gz"  # Replace with the path to your .gz file
+
+with gzip.open(file_path, 'rt') as f:
+    for _ in range(100):
+        line = f.readline()
+        print(line)
+
+input("Press Enter to exit...")
