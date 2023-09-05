@@ -1,0 +1,82 @@
+import os
+import pandas as pd
+import tarfile
+import h5py
+import numpy as np
+
+# Define the data path
+data_path = "Data"
+
+# Extract the .tar files (if not already done)
+for filename in os.listdir(data_path):
+    if filename.endswith(".tar"):
+        with tarfile.open(os.path.join(data_path, filename), 'r') as archive:
+            archive.extractall(path=data_path)
+
+# Remove .tar files (if not already done)
+for filename in os.listdir(data_path):
+    if filename.endswith(".tar"):
+        os.remove(os.path.join(data_path, filename))
+
+# Load and inspect .mat and .csv files from the 's1' folder
+s1_path = os.path.join(data_path, 's1')
+
+# Function to recursively load data from h5py groups into nested dictionaries
+def load_from_group(group):
+    data = {}
+    for key in group.keys():
+        item = group[key]
+        if isinstance(item, h5py.Group):
+            data[key] = load_from_group(item)
+        elif isinstance(item, h5py.Dataset):
+            data[key] = item[()]
+    return data
+
+# Load .mat files using h5py
+with h5py.File(os.path.join(s1_path, 'data_primary.mat'), 'r') as file:
+    data_primary = load_from_group(file)
+
+with h5py.File(os.path.join(s1_path, 'data_derived.mat'), 'r') as file:
+    data_derived = load_from_group(file)
+
+# Load summary_file_trial.csv without headers and assign appropriate column names
+summary_file_trial = pd.read_csv(os.path.join(s1_path, 'summary_file_trial.csv'), header=None)
+summary_file_trial.columns = [
+    "Trial number",
+    "Accuracy",
+    "Trial type",
+    "Condition",
+    "Delay jitter length in ms",
+    "Response time in ms",
+    "Pretrial epoch start time",
+    "Encoding and pre-cue delay epoch start time",
+    "Post-cue delay epoch start time"
+]
+
+# Extract neural data
+neural_data = data_primary['gdat_clean_filt']
+
+# Function to segment the neural data based on trial start and end times
+def segment_neural_data(neural_data, trial_data):
+    segmented_trials = []
+    for index, row in trial_data.iterrows():
+        start_index = int(row['Pretrial epoch start time'])
+        end_index = int(row['Post-cue delay epoch start time'] + row['Response time in ms'])
+        trial_segment = neural_data[start_index:end_index, :]
+        segmented_trials.append(trial_segment)
+    return segmented_trials
+
+# Segment the neural data
+segmented_trials = segment_neural_data(neural_data, summary_file_trial)
+
+# The variable 'segmented_trials' now contains the neural data segmented by trial
+print(f"Total segmented trials: {len(segmented_trials)}")
+print(f"Shape of the first segmented trial: {segmented_trials[0].shape}")
+import matplotlib.pyplot as plt
+trial_num = 1  # change this to view different trials
+channel_num = 1  # change this to view different channels
+plt.plot(segmented_trials[trial_num][:, channel_num])
+plt.title(f"Neural data for Trial {trial_num}, Channel {channel_num}")
+plt.xlabel("Time")
+plt.ylabel("Amplitude")
+plt.show()
