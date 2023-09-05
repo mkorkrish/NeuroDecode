@@ -3,6 +3,14 @@ import pandas as pd
 import tarfile
 import h5py
 import numpy as np
+from scipy.stats import skew, kurtosis
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, classification_report
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
 
 # Define the data path
 data_path = "Data"
@@ -36,9 +44,6 @@ def load_from_group(group):
 with h5py.File(os.path.join(s1_path, 'data_primary.mat'), 'r') as file:
     data_primary = load_from_group(file)
 
-with h5py.File(os.path.join(s1_path, 'data_derived.mat'), 'r') as file:
-    data_derived = load_from_group(file)
-
 # Load summary_file_trial.csv without headers and assign appropriate column names
 summary_file_trial = pd.read_csv(os.path.join(s1_path, 'summary_file_trial.csv'), header=None)
 summary_file_trial.columns = [
@@ -69,14 +74,134 @@ def segment_neural_data(neural_data, trial_data):
 # Segment the neural data
 segmented_trials = segment_neural_data(neural_data, summary_file_trial)
 
-# The variable 'segmented_trials' now contains the neural data segmented by trial
-print(f"Total segmented trials: {len(segmented_trials)}")
-print(f"Shape of the first segmented trial: {segmented_trials[0].shape}")
-import matplotlib.pyplot as plt
-trial_num = 1  # change this to view different trials
-channel_num = 1  # change this to view different channels
-plt.plot(segmented_trials[trial_num][:, channel_num])
-plt.title(f"Neural data for Trial {trial_num}, Channel {channel_num}")
-plt.xlabel("Time")
-plt.ylabel("Amplitude")
+# Function to extract features
+def extract_features(segmented_trials):
+    means = []
+    variances = []
+    skews = []
+    kurtoses = []
+    for trial in segmented_trials:
+        means.append(np.mean(trial, axis=0))
+        variances.append(np.var(trial, axis=0))
+        skews.append(skew(trial, axis=0))
+        kurtoses.append(kurtosis(trial, axis=0))
+    means = np.array(means)
+    variances = np.array(variances)
+    skews = np.array(skews)
+    kurtoses = np.array(kurtoses)
+    num_channels = means.shape[1]
+    feature_names = []
+    for i in range(num_channels):
+        feature_names.extend([f"mean_ch{i}", f"variance_ch{i}", f"skew_ch{i}", f"kurtosis_ch{i}"])
+    features_df = pd.DataFrame(np.hstack([means, variances, skews, kurtoses]), columns=feature_names)
+    return features_df
+
+# Data Preparation
+X = extract_features(segmented_trials)  # Features
+
+# Save the feature names before any transformation on X
+feature_names = list(X.columns)
+
+# Impute missing values
+imputer = SimpleImputer(strategy='mean')
+X = imputer.fit_transform(X)
+
+# Scale the features
+scaler = StandardScaler()
+X = scaler.fit_transform(X)
+
+y = summary_file_trial['Trial type']  # Target
+
+# Splitting the data into training and test sets (80% train, 20% test)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Model Selection and Training
+
+# Logistic Regression
+clf = LogisticRegression(max_iter=5000)  # Initialize the classifier with more iterations
+clf.fit(X_train, y_train)  # Train the classifier
+
+# Model Evaluation for Logistic Regression
+y_pred = clf.predict(X_test)  # Predict on test set
+accuracy = accuracy_score(y_test, y_pred)
+print(f"Logistic Regression Accuracy: {accuracy * 100:.2f}%")
+print("\\nClassification Report for Logistic Regression:\\n", classification_report(y_test, y_pred))
+
+# Random Forest
+rf_clf = RandomForestClassifier(n_estimators=100, random_state=42)
+rf_clf.fit(X_train, y_train)
+
+# Model Evaluation for Random Forest
+rf_y_pred = rf_clf.predict(X_test)
+rf_accuracy = accuracy_score(y_test, rf_y_pred)
+print(f"\\nRandom Forest Accuracy: {rf_accuracy * 100:.2f}%")
+print("\\nClassification Report for Random Forest:\\n", classification_report(y_test, rf_y_pred))
+
+# Extract feature importances from the trained Random Forest model
+feature_importances = rf_clf.feature_importances_
+
+# Combine feature names and their importance scores
+features = list(zip(feature_names, feature_importances))
+
+# Sort features based on importance
+sorted_features = sorted(features, key=lambda x: x[1], reverse=True)
+
+# Display top N features
+N = 20
+top_features = sorted_features[:N]
+
+# Separate feature names and their scores for plotting
+top_feature_names = [feature[0] for feature in top_features]
+top_feature_scores = [feature[1] for feature in top_features]
+
+# Plotting the feature importances
+plt.figure(figsize=(15, 10))
+plt.barh(top_feature_names, top_feature_scores, align='center')
+plt.xlabel('Importance Score')
+plt.ylabel('Features')
+plt.title('Top N Most Important Features from Random Forest')
+plt.gca().invert_yaxis()
 plt.show()
+
+import pywt
+from scipy.signal import welch
+
+def extract_wavelet_features(segmented_trials):
+    wavelet_features = []
+    max_length = 0  # To keep track of maximum length of coefficients
+    
+    # First, determine max_length from all trials
+    for trial in segmented_trials:
+        coeffs = pywt.wavedec(trial, wavelet='db1', level=1)
+        combined_coeffs = np.concatenate(coeffs)
+        if len(combined_coeffs) > max_length:
+            max_length = len(combined_coeffs)
+
+    # Now, extract and adjust the length of coefficients for all trials
+    for trial in segmented_trials:
+        coeffs = pywt.wavedec(trial, wavelet='db1', level=1)
+        combined_coeffs = np.concatenate(coeffs)
+        
+        # Adjust the length
+        if len(combined_coeffs) > max_length:
+            combined_coeffs = combined_coeffs[:max_length]
+        elif len(combined_coeffs) < max_length:
+            combined_coeffs = np.pad(combined_coeffs, (0, max_length - len(combined_coeffs)))
+            
+        wavelet_features.append(combined_coeffs)
+
+    return np.array(wavelet_features)
+
+def extract_psd_features(segmented_trials, fs=1000):  # Assuming a sampling rate of 1kHz
+    psd_features = []
+    for trial in segmented_trials:
+        frequencies, power = welch(trial, fs=fs)
+        psd_features.append(power)
+    return np.array(psd_features)
+
+# Extract wavelet and PSD features
+wavelet_features = extract_wavelet_features(segmented_trials)
+psd_features = extract_psd_features(segmented_trials)
+
+# Combine with previously extracted features
+X_combined = np.hstack([X, wavelet_features, psd_features])
