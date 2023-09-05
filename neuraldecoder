@@ -11,6 +11,8 @@ from sklearn.metrics import accuracy_score, classification_report
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
+import pywt
+from scipy.signal import welch
 
 # Define the data path
 data_path = "Data"
@@ -99,6 +101,10 @@ def extract_features(segmented_trials):
 # Data Preparation
 X = extract_features(segmented_trials)  # Features
 
+# Before imputation, drop columns with all NaN values
+nan_columns = X.columns[X.isnull().all()].tolist()
+X.drop(nan_columns, axis=1, inplace=True)
+
 # Save the feature names before any transformation on X
 feature_names = list(X.columns)
 
@@ -125,7 +131,7 @@ clf.fit(X_train, y_train)  # Train the classifier
 y_pred = clf.predict(X_test)  # Predict on test set
 accuracy = accuracy_score(y_test, y_pred)
 print(f"Logistic Regression Accuracy: {accuracy * 100:.2f}%")
-print("\\nClassification Report for Logistic Regression:\\n", classification_report(y_test, y_pred))
+print("\nClassification Report for Logistic Regression:\n", classification_report(y_test, y_pred))
 
 # Random Forest
 rf_clf = RandomForestClassifier(n_estimators=100, random_state=42)
@@ -134,8 +140,8 @@ rf_clf.fit(X_train, y_train)
 # Model Evaluation for Random Forest
 rf_y_pred = rf_clf.predict(X_test)
 rf_accuracy = accuracy_score(y_test, rf_y_pred)
-print(f"\\nRandom Forest Accuracy: {rf_accuracy * 100:.2f}%")
-print("\\nClassification Report for Random Forest:\\n", classification_report(y_test, rf_y_pred))
+print(f"\nRandom Forest Accuracy: {rf_accuracy * 100:.2f}%")
+print("\nClassification Report for Random Forest:\n", classification_report(y_test, rf_y_pred))
 
 # Extract feature importances from the trained Random Forest model
 feature_importances = rf_clf.feature_importances_
@@ -163,26 +169,12 @@ plt.title('Top N Most Important Features from Random Forest')
 plt.gca().invert_yaxis()
 plt.show()
 
-import pywt
-from scipy.signal import welch
-
-def extract_wavelet_features(segmented_trials):
+# Optimizing the wavelet feature extraction:
+def extract_wavelet_features(segmented_trials, max_length=5000):
     wavelet_features = []
-    max_length = 0  # To keep track of maximum length of coefficients
-    
-    # First, determine max_length from all trials
     for trial in segmented_trials:
         coeffs = pywt.wavedec(trial, wavelet='db1', level=1)
         combined_coeffs = np.concatenate(coeffs)
-        if len(combined_coeffs) > max_length:
-            max_length = len(combined_coeffs)
-
-    # Now, extract and adjust the length of coefficients for all trials
-    for trial in segmented_trials:
-        coeffs = pywt.wavedec(trial, wavelet='db1', level=1)
-        combined_coeffs = np.concatenate(coeffs)
-        
-        # Adjust the length
         if len(combined_coeffs) > max_length:
             combined_coeffs = combined_coeffs[:max_length]
         elif len(combined_coeffs) < max_length:
@@ -192,16 +184,98 @@ def extract_wavelet_features(segmented_trials):
 
     return np.array(wavelet_features)
 
+
 def extract_psd_features(segmented_trials, fs=1000):  # Assuming a sampling rate of 1kHz
-    psd_features = []
+    psd_features_list = []
+
+    # Determine the expected length of the power spectrum using the first trial
+    frequencies, power_ref = welch(segmented_trials[0], fs=fs, nperseg=min(256, len(segmented_trials[0])))
+    ref_length = power_ref.shape[1]
+    
     for trial in segmented_trials:
-        frequencies, power = welch(trial, fs=fs)
-        psd_features.append(power)
-    return np.array(psd_features)
+        frequencies, power = welch(trial, fs=fs, nperseg=min(256, len(trial)))
+        
+        if power.shape[1] < ref_length:
+            padding_length = ref_length - power.shape[1]
+            padding_array = np.zeros((power.shape[0], padding_length))
+            power = np.concatenate([power, padding_array], axis=1)
+        else:
+            power = power[:, :ref_length]
+
+        flattened_power = power.flatten()
+        psd_features_list.append(flattened_power)
+
+    # Determine the desired length (using the max length here as an example)
+    desired_length = max([item.shape[0] for item in psd_features_list])
+
+    # Pad or truncate elements to the desired length
+    for i in range(len(psd_features_list)):
+        length_difference = desired_length - psd_features_list[i].shape[0]
+        if length_difference > 0:  # If padding is needed
+            psd_features_list[i] = np.concatenate([psd_features_list[i], np.zeros(length_difference)])
+        else:  # If truncation is needed
+            psd_features_list[i] = psd_features_list[i][:desired_length]
+
+    return np.array(psd_features_list)
+
 
 # Extract wavelet and PSD features
 wavelet_features = extract_wavelet_features(segmented_trials)
 psd_features = extract_psd_features(segmented_trials)
 
-# Combine with previously extracted features
+# Ensure wavelet_features and psd_features are 2D
+if len(wavelet_features.shape) > 2:
+    wavelet_features = wavelet_features.reshape(wavelet_features.shape[0], -1)
+
+if len(psd_features.shape) > 2:
+    psd_features = psd_features.reshape(psd_features.shape[0], -1)
+
+# Combine the arrays
 X_combined = np.hstack([X, wavelet_features, psd_features])
+
+# Splitting the combined data into training and test sets (80% train, 20% test)
+X_train_combined, X_test_combined, y_train, y_test = train_test_split(X_combined, y, test_size=0.2, random_state=42)
+
+# Logistic Regression on Combined Features
+clf_combined = LogisticRegression(max_iter=5000)
+clf_combined.fit(X_train_combined, y_train)
+
+# Model Evaluation for Logistic Regression on Combined Features
+y_pred_combined = clf_combined.predict(X_test_combined)
+accuracy_combined = accuracy_score(y_test, y_pred_combined)
+print(f"Logistic Regression (with combined features) Accuracy: {accuracy_combined * 100:.2f}%")
+print("\nClassification Report for Logistic Regression with combined features:\n", classification_report(y_test, y_pred_combined))
+
+# Random Forest on Combined Features
+rf_clf_combined = RandomForestClassifier(n_estimators=100, random_state=42)
+rf_clf_combined.fit(X_train_combined, y_train)
+
+# Model Evaluation for Random Forest on Combined Features
+rf_y_pred_combined = rf_clf_combined.predict(X_test_combined)
+rf_accuracy_combined = accuracy_score(y_test, rf_y_pred_combined)
+print(f"\nRandom Forest (with combined features) Accuracy: {rf_accuracy_combined * 100:.2f}%")
+print("\nClassification Report for Random Forest with combined features:\n", classification_report(y_test, rf_y_pred_combined))
+
+# Extract feature importances from the trained Random Forest model
+feature_importances_combined = rf_clf_combined.feature_importances_
+features_combined = list(zip(feature_names + ["wavelet_" + str(i) for i in range(wavelet_features.shape[1])] + ["psd_" + str(i) for i in range(psd_features.shape[1])], feature_importances_combined))
+
+# Sort features based on importance
+sorted_features_combined = sorted(features_combined, key=lambda x: x[1], reverse=True)
+
+# Display top N features
+N = 20
+top_features_combined = sorted_features_combined[:N]
+
+# Separate feature names and their scores for plotting
+top_feature_names_combined = [feature[0] for feature in top_features_combined]
+top_feature_scores_combined = [feature[1] for feature in top_features_combined]
+
+# Plotting the feature importances for combined features
+plt.figure(figsize=(15, 10))
+plt.barh(top_feature_names_combined, top_feature_scores_combined, align='center')
+plt.xlabel('Importance Score')
+plt.ylabel('Features')
+plt.title('Top N Most Important Features from Random Forest with Combined Features')
+plt.gca().invert_yaxis()
+plt.show()
