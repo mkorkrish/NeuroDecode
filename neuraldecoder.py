@@ -14,24 +14,23 @@ import matplotlib.pyplot as plt
 import pywt
 from scipy.signal import welch
 
-# Define the data path
 data_path = "Data"
 
-# Extract the .tar files (if not already done)
+
 for filename in os.listdir(data_path):
     if filename.endswith(".tar"):
         with tarfile.open(os.path.join(data_path, filename), 'r') as archive:
             archive.extractall(path=data_path)
 
-# Remove .tar files (if not already done)
+
 for filename in os.listdir(data_path):
     if filename.endswith(".tar"):
         os.remove(os.path.join(data_path, filename))
 
-# Load and inspect .mat and .csv files from the 's1' folder
+
 s1_path = os.path.join(data_path, 's1')
 
-# Function to recursively load data from h5py groups into nested dictionaries
+
 def load_from_group(group):
     data = {}
     for key in group.keys():
@@ -42,11 +41,11 @@ def load_from_group(group):
             data[key] = item[()]
     return data
 
-# Load .mat files using h5py
+
 with h5py.File(os.path.join(s1_path, 'data_primary.mat'), 'r') as file:
     data_primary = load_from_group(file)
 
-# Load summary_file_trial.csv without headers and assign appropriate column names
+
 summary_file_trial = pd.read_csv(os.path.join(s1_path, 'summary_file_trial.csv'), header=None)
 summary_file_trial.columns = [
     "Trial number",
@@ -60,10 +59,10 @@ summary_file_trial.columns = [
     "Post-cue delay epoch start time"
 ]
 
-# Extract neural data
+
 neural_data = data_primary['gdat_clean_filt']
 
-# Function to segment the neural data based on trial start and end times
+
 def segment_neural_data(neural_data, trial_data):
     segmented_trials = []
     for index, row in trial_data.iterrows():
@@ -73,10 +72,10 @@ def segment_neural_data(neural_data, trial_data):
         segmented_trials.append(trial_segment)
     return segmented_trials
 
-# Segment the neural data
+
 segmented_trials = segment_neural_data(neural_data, summary_file_trial)
 
-# Function to extract features
+
 def extract_features(segmented_trials):
     means = []
     variances = []
@@ -98,27 +97,15 @@ def extract_features(segmented_trials):
     features_df = pd.DataFrame(np.hstack([means, variances, skews, kurtoses]), columns=feature_names)
     return features_df
 
-# Data Preparation
 X = extract_features(segmented_trials)  # Features
-
-# Before imputation, drop columns with all NaN values
 nan_columns = X.columns[X.isnull().all()].tolist()
 X.drop(nan_columns, axis=1, inplace=True)
-
-# Save the feature names before any transformation on X
 feature_names = list(X.columns)
-
-# Impute missing values
 imputer = SimpleImputer(strategy='mean')
 X = imputer.fit_transform(X)
-
-# Scale the features
 scaler = StandardScaler()
 X = scaler.fit_transform(X)
-
 y = summary_file_trial['Trial type']  # Target
-
-# Splitting the data into training and test sets (80% train, 20% test)
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
 # Model Selection and Training
