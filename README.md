@@ -1,1 +1,1 @@
-•	Developed Python scripts for preprocessing EEG data and applied wavelet transformations to enhance neural signal decoding accuracy, achieving 83% accuracy using Random Forest models on epileptic patient data.
+
