@@ -1,2 +1,1 @@
-# NeuroDecode
-"NeuroDecode" bridges the gap between external stimuli and the brain's corresponding neural signals. By decoding these neural responses, I hope to unravel the mysteries of how the brain perceives and processes different stimuli, thus gaining deeper insights into brain functionalities and potential applications in medical and technological domains.
+•	Developed Python scripts for preprocessing EEG data and applied wavelet transformations to enhance neural signal decoding accuracy, achieving 83% accuracy using Random Forest models on epileptic patient data.
